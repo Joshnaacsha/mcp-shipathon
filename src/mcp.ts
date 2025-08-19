@@ -12,9 +12,9 @@ import {
   getMessagesAround,
   searchDbForContacts,
   searchMessages,
-} from "./database.ts";
+} from "./database.js";
 
-import { sendWhatsAppMessage, type WhatsAppSocket } from "./whatsapp.ts";
+import { sendWhatsAppMessage, type WhatsAppSocket } from "./whatsapp.js";
 import { type P } from "pino";
 
 function formatDbMessageForJson(msg: DbMessage) {

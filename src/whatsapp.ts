@@ -18,7 +18,7 @@ import {
   storeMessage,
   storeChat,
   type Message as DbMessage,
-} from "./database.ts";
+} from "./database.js";
 
 const AUTH_DIR = path.join(import.meta.dirname, "..", "auth_info");
 

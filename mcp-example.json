@@ -3,7 +3,7 @@
     "whatsapp": {
       "command": "node",
       "args": [
-        "src/main.ts"
+        "src/main.js"
       ],
       "timeout": 15,
       "alwaysAllow": [],

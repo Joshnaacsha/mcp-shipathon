@@ -1,7 +1,7 @@
 import { pino } from "pino";
-import { initializeDatabase } from "./database.ts";
-import { startWhatsAppConnection, type WhatsAppSocket } from "./whatsapp.ts";
-import { startMcpServer } from "./mcp.ts";
+import { initializeDatabase } from "./database.js";
+import { startWhatsAppConnection, type WhatsAppSocket } from "./whatsapp.js";
+import { startMcpServer } from "./mcp.js";
 
 const waLogger = pino(
   {
