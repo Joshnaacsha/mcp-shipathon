@@ -2,9 +2,7 @@ import { pino } from "pino";
 import { initializeDatabase } from "./database.js";
 import { startWhatsAppConnection, type WhatsAppSocket } from "./whatsapp.js";
 import { startMcpServer } from "./mcp.js";
-import { WebSocketServerTransport } from "@modelcontextprotocol/sdk/server/websocket.js";
-import { createServer } from "http";
-import { WebSocketServer } from "ws";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 const waLogger = pino(
   {
