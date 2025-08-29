@@ -1,4 +1,5 @@
 import readline from 'readline';
+import { spawn } from 'child_process';
 import {
     getChats,
     getMessages,
@@ -58,65 +59,107 @@ function showMenu() {
     console.log("─".repeat(60));
 }
 
-// Function to send message via MCP server
-async function sendMessageViaMcp(recipient, message) {
+// Function to communicate with MCP server via stdio
+async function callMcpTool(toolName, args) {
     return new Promise((resolve, reject) => {
-        // Create MCP request payload
         const mcpRequest = {
             jsonrpc: "2.0",
             id: Date.now(),
             method: "tools/call",
             params: {
-                name: "send_message",
-                arguments: {
-                    recipient: recipient,
-                    message: message
-                }
+                name: toolName,
+                arguments: args
             }
         };
 
-        // Spawn node process to communicate with MCP server
+        // Spawn the MCP server process
         const mcpProcess = spawn('node', ['../server/dist/main.js'], {
             stdio: ['pipe', 'pipe', 'pipe']
         });
 
-        let responseData = '';
-        let errorData = '';
+        let responseBuffer = '';
+        let errorBuffer = '';
+        let hasResponded = false;
+
+        const cleanup = () => {
+            if (!hasResponded) {
+                hasResponded = true;
+                mcpProcess.kill('SIGTERM');
+            }
+        };
+
+        // Set timeout
+        const timeout = setTimeout(() => {
+            if (!hasResponded) {
+                cleanup();
+                reject(new Error('MCP request timed out after 30 seconds'));
+            }
+        }, 30000);
 
         mcpProcess.stdout.on('data', (data) => {
-            responseData += data.toString();
-        });
+            responseBuffer += data.toString();
 
-        mcpProcess.stderr.on('data', (data) => {
-            errorData += data.toString();
-        });
+            // Try to parse JSON responses as they come in
+            const lines = responseBuffer.split('\n');
+            for (const line of lines) {
+                if (line.trim()) {
+                    try {
+                        const response = JSON.parse(line.trim());
+                        if (response.id === mcpRequest.id && !hasResponded) {
+                            hasResponded = true;
+                            clearTimeout(timeout);
+                            cleanup();
 
-        mcpProcess.on('close', (code) => {
-            if (code === 0) {
-                try {
-                    const response = JSON.parse(responseData);
-                    resolve(response);
-                } catch (e) {
-                    resolve({ success: true, message: "Message sent successfully" });
+                            if (response.error) {
+                                reject(new Error(response.error.message || 'MCP tool error'));
+                            } else {
+                                resolve(response.result);
+                            }
+                            return;
+                        }
+                    } catch (parseError) {
+                        // Not a JSON line, continue collecting data
+                    }
                 }
-            } else {
-                reject(new Error(errorData || `Process exited with code ${code}`));
             }
         });
 
+        mcpProcess.stderr.on('data', (data) => {
+            errorBuffer += data.toString();
+        });
+
         mcpProcess.on('error', (error) => {
-            reject(error);
+            if (!hasResponded) {
+                hasResponded = true;
+                clearTimeout(timeout);
+                reject(new Error(`Failed to start MCP process: ${error.message}`));
+            }
+        });
+
+        mcpProcess.on('close', (code) => {
+            if (!hasResponded) {
+                hasResponded = true;
+                clearTimeout(timeout);
+                if (code !== 0) {
+                    reject(new Error(`MCP process exited with code ${code}\nError output: ${errorBuffer}`));
+                } else {
+                    reject(new Error('MCP process closed without sending response'));
+                }
+            }
         });
 
         // Send the request
-        mcpProcess.stdin.write(JSON.stringify(mcpRequest) + '\n');
-        mcpProcess.stdin.end();
-
-        // Timeout after 10 seconds
-        setTimeout(() => {
-            mcpProcess.kill();
-            reject(new Error('Request timed out'));
-        }, 10000);
+        try {
+            mcpProcess.stdin.write(JSON.stringify(mcpRequest) + '\n');
+            mcpProcess.stdin.end();
+        } catch (error) {
+            if (!hasResponded) {
+                hasResponded = true;
+                clearTimeout(timeout);
+                cleanup();
+                reject(new Error(`Failed to send request: ${error.message}`));
+            }
+        }
     });
 }
 
@@ -131,6 +174,11 @@ function formatChat(chat) {
 async function executeCommand(command, args) {
     try {
         switch (command) {
+            case 'help':
+            case 'menu':
+                showMenu();
+                break;
+
             case 'list_chats':
                 const limit = parseInt(args[0]) || 20;
                 const page = parseInt(args[1]) || 0;
@@ -279,14 +327,43 @@ async function executeCommand(command, args) {
                 if (confirm.toLowerCase() === 'y' || confirm.toLowerCase() === 'yes') {
                     try {
                         console.log("📡 Attempting to send via MCP server...");
-                        await sendMessageViaMcp(recipient, messageText);
-                        console.log("✅ Message sent successfully!");
+                        const result = await callMcpTool('send_message', {
+                            recipient: recipient,
+                            message: messageText
+                        });
+
+                        if (result.content && result.content[0] && result.content[0].text) {
+                            console.log("✅ " + result.content[0].text);
+                        } else {
+                            console.log("✅ Message sent successfully!");
+                        }
                     } catch (error) {
                         console.log(`❌ Failed to send message: ${error.message}`);
                         console.log("Make sure your WhatsApp MCP server is running and connected.");
+                        console.log("Try running: node ../server/dist/main.js");
                     }
                 } else {
                     console.log("📋 Message sending cancelled.");
+                }
+                break;
+
+            case 'status':
+                try {
+                    console.log("📊 Checking MCP server status...");
+                    const statusResult = await callMcpTool('get_status', {});
+
+                    if (statusResult.content && statusResult.content[0] && statusResult.content[0].text) {
+                        const status = JSON.parse(statusResult.content[0].text);
+                        console.log("\n📊 Server Status:");
+                        console.log(`  WhatsApp Connected: ${status.whatsapp_connected ? '✅' : '❌'}`);
+                        console.log(`  User: ${status.user_name}`);
+                        console.log(`  Server Ready: ${status.server_ready ? '✅' : '❌'}`);
+                        console.log(`  State: ${status.state}`);
+                        console.log(`  Timestamp: ${new Date(status.timestamp).toLocaleString()}`);
+                    }
+                } catch (error) {
+                    console.log(`❌ Failed to get status: ${error.message}`);
+                    console.log("Make sure your WhatsApp MCP server is running.");
                 }
                 break;
 
@@ -315,8 +392,9 @@ async function main() {
         console.log("✅ Database connected successfully!\n");
 
         console.log("💡 This client reads directly from the WhatsApp database.");
-        console.log("   Make sure your WhatsApp MCP server is running separately.\n");
+        console.log("   For sending messages, make sure your WhatsApp MCP server is running separately.\n");
 
+        console.log("💡 TIP: Use 'status' command to check if your MCP server is connected to WhatsApp.\n");
         console.log("Type 'help' for available commands or 'quit' to exit.\n");
 
         while (true) {
