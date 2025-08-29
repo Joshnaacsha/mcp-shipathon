@@ -1,8 +1,12 @@
-import { DatabaseSync } from "node:sqlite";
+import Database from "better-sqlite3";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 import fs from "node:fs";
 
-const DATA_DIR = path.join(import.meta.dirname, "..", "data");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const DATA_DIR = path.join(__dirname, "..", "data");
 const DB_PATH = path.join(DATA_DIR, "whatsapp.db");
 
 export interface Chat {
@@ -24,19 +28,19 @@ export type Message = {
   chat_name?: string | null;
 };
 
-let dbInstance: DatabaseSync | null = null;
+let dbInstance: Database.Database | null = null;
 
-function getDb(): DatabaseSync {
+function getDb(): Database.Database {
   if (!dbInstance) {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
-    dbInstance = new DatabaseSync(DB_PATH);
+    dbInstance = new Database(DB_PATH);
   }
   return dbInstance;
 }
 
-export function initializeDatabase(): DatabaseSync {
+export function initializeDatabase(): Database.Database {
   const db = getDb();
 
   db.exec("PRAGMA journal_mode = WAL");
@@ -210,15 +214,14 @@ export function getChats(
                 c.jid,
                 c.name,
                 c.last_message_time
-                ${
-                  includeLastMessage
-                    ? `,
+                ${includeLastMessage
+        ? `,
                 (SELECT m.content FROM messages m WHERE m.chat_jid = c.jid ORDER BY m.timestamp DESC LIMIT 1) as last_message,
                 (SELECT m.sender FROM messages m WHERE m.chat_jid = c.jid ORDER BY m.timestamp DESC LIMIT 1) as last_sender,
                 (SELECT m.is_from_me FROM messages m WHERE m.chat_jid = c.jid ORDER BY m.timestamp DESC LIMIT 1) as last_is_from_me
                 `
-                    : ""
-                }
+        : ""
+      }
             FROM chats c
         `;
 
@@ -258,15 +261,14 @@ export function getChat(
                 c.jid,
                 c.name,
                 c.last_message_time
-                ${
-                  includeLastMessage
-                    ? `,
+                ${includeLastMessage
+        ? `,
                 (SELECT m.content FROM messages m WHERE m.chat_jid = c.jid ORDER BY m.timestamp DESC LIMIT 1) as last_message,
                 (SELECT m.sender FROM messages m WHERE m.chat_jid = c.jid ORDER BY m.timestamp DESC LIMIT 1) as last_sender,
                 (SELECT m.is_from_me FROM messages m WHERE m.chat_jid = c.jid ORDER BY m.timestamp DESC LIMIT 1) as last_is_from_me
                 `
-                    : ""
-                }
+        : ""
+      }
             FROM chats c
             WHERE c.jid = ? -- Positional parameter 1
         `;
@@ -369,7 +371,7 @@ export function searchDbForContacts(
 
 export function searchMessages(
   searchQuery: string,
-  chatJid?: string | null, 
+  chatJid?: string | null,
   limit: number = 10,
   page: number = 0,
 ): Message[] {
@@ -386,18 +388,18 @@ export function searchMessages(
     const params: (string | number | null)[] = [searchPattern];
 
     if (chatJid) {
-      sql += ` AND m.chat_jid = ?`; 
+      sql += ` AND m.chat_jid = ?`;
       params.push(chatJid);
     }
 
     sql += ` ORDER BY m.timestamp DESC`;
     sql += ` LIMIT ?`;
     params.push(limit);
-    sql += ` OFFSET ?`; 
+    sql += ` OFFSET ?`;
     params.push(offset);
 
     const stmt = db.prepare(sql);
-    const rows = stmt.all(...params) as any[]; 
+    const rows = stmt.all(...params) as any[];
     return rows.map(rowToMessage);
   } catch (error) {
     console.error("Error searching messages:", error);

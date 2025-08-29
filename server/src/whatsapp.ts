@@ -1,0 +1,325 @@
+import {
+    makeWASocket,
+    useMultiFileAuthState,
+    fetchLatestBaileysVersion,
+    makeCacheableSignalKeyStore,
+    DisconnectReason,
+    type WAMessage,
+    type BaileysEventMap,
+    type WASocket,
+    isJidGroup,
+    jidNormalizedUser,
+} from "@whiskeysockets/baileys";
+import pino from "pino";
+type Logger = pino.Logger;
+import path from "node:path";
+import open from "open";
+import { fileURLToPath } from "node:url";
+import fs from 'node:fs/promises';
+
+import {
+    initializeDatabase,
+    storeMessage,
+    storeChat,
+    type Message as DbMessage,
+} from "./database.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const AUTH_DIR = path.join(__dirname, "..", "auth_info");
+
+// Export the WhatsApp socket type for use in other files
+export type WhatsAppSocket = WASocket;
+
+// Function to send WhatsApp messages
+export async function sendWhatsAppMessage(
+    logger: Logger,
+    sock: WhatsAppSocket,
+    jid: string,
+    message: string
+): Promise<WAMessage> {
+    try {
+        const result = await sock.sendMessage(jid, { text: message });
+        logger.info(`Message sent to ${jid}: ${message}`);
+        if (!result) {
+            throw new Error("Failed to send message - no result returned");
+        }
+        return result;
+    } catch (error) {
+        logger.error('Error sending WhatsApp message:', error);
+        throw error;
+    }
+} const EVENTS = {
+    CONNECTION: 'connection.update',
+    CREDS: 'creds.update',
+    MESSAGES: 'messages.upsert'
+} as const;
+
+interface ConnectionState {
+    connection?: 'close' | 'connecting' | 'open';
+    lastDisconnect?: {
+        error?: Error & {
+            output?: { statusCode?: number };
+        };
+        date: Date;
+    };
+    qr?: string;
+}
+
+function parseMessageForDb(msg: WAMessage): DbMessage | null {
+    if (!msg.message || !msg.key || !msg.key.remoteJid) {
+        return null;
+    }
+
+    let content: string | null = null;
+    const messageType = Object.keys(msg.message)[0];
+
+    if (msg.message.conversation) {
+        content = msg.message.conversation;
+    } else if (msg.message.extendedTextMessage?.text) {
+        content = msg.message.extendedTextMessage.text;
+    } else if (msg.message.imageMessage?.caption) {
+        content = `[Image] ${msg.message.imageMessage.caption}`;
+    } else if (msg.message.videoMessage?.caption) {
+        content = `[Video] ${msg.message.videoMessage.caption}`;
+    } else if (msg.message.documentMessage?.caption) {
+        content = `[Document] ${msg.message.documentMessage.caption ||
+            msg.message.documentMessage.fileName ||
+            ""}`;
+    } else if (msg.message.audioMessage) {
+        content = `[Audio]`;
+    } else if (msg.message.stickerMessage) {
+        content = `[Sticker]`;
+    } else if (msg.message.locationMessage?.address) {
+        content = `[Location] ${msg.message.locationMessage.address}`;
+    } else if (msg.message.contactMessage?.displayName) {
+        content = `[Contact] ${msg.message.contactMessage.displayName}`;
+    } else if (msg.message.pollCreationMessage?.name) {
+        content = `[Poll] ${msg.message.pollCreationMessage.name}`;
+    }
+
+    if (!content) {
+        return null;
+    }
+
+    const timestampNum =
+        typeof msg.messageTimestamp === "number"
+            ? msg.messageTimestamp * 1000
+            : typeof msg.messageTimestamp === "bigint"
+                ? Number(msg.messageTimestamp) * 1000
+                : Date.now();
+
+    const timestamp = new Date(timestampNum);
+
+    let senderJid: string | null | undefined = msg.key.participant;
+    if (!msg.key.fromMe && !senderJid && !isJidGroup(msg.key.remoteJid)) {
+        senderJid = msg.key.remoteJid;
+    }
+    if (msg.key.fromMe && !isJidGroup(msg.key.remoteJid)) {
+        senderJid = null;
+    }
+
+    return {
+        id: msg.key.id!,
+        chat_jid: msg.key.remoteJid,
+        sender: senderJid ? jidNormalizedUser(senderJid) : null,
+        content: content,
+        timestamp: timestamp,
+        is_from_me: msg.key.fromMe ?? false,
+    };
+}
+
+async function cleanAuth(logger: Logger): Promise<void> {
+    try {
+        await fs.rm(AUTH_DIR, { recursive: true, force: true });
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        await fs.mkdir(AUTH_DIR, { recursive: true });
+    } catch (error) {
+        logger.error("Error cleaning auth directory:", error);
+        throw error;
+    }
+}
+
+async function handleConnection(
+    logger: Logger,
+    version: any,
+    auth: { state: any; saveCreds: () => Promise<void> }
+): Promise<WASocket> {
+    return new Promise<WASocket>((resolve, reject) => {
+        // Create WhatsApp socket
+        const sock = makeWASocket({
+            version,
+            logger,
+            auth: {
+                creds: auth.state.creds,
+                keys: makeCacheableSignalKeyStore(auth.state.keys, logger),
+            },
+            printQRInTerminal: true,
+            browser: ["WhatsApp Web", "Chrome", "2.2246.9"],
+            connectTimeoutMs: 60000,
+            qrTimeout: 40000,
+            defaultQueryTimeoutMs: 20000,
+            emitOwnEvents: true,
+            markOnlineOnConnect: false,
+            retryRequestDelayMs: 1000
+        });
+
+        const cleanupConnection = () => {
+            Object.values(EVENTS).forEach(event => {
+                sock.ev.removeAllListeners(event as keyof BaileysEventMap);
+            });
+            sock.ws?.close();
+        };
+
+        // Set connection timeout
+        const connectionTimeout = setTimeout(() => {
+            logger.error("Connection attempt timed out");
+            cleanupConnection();
+            reject(new Error("Connection timed out after 60 seconds"));
+        }, 60000);
+
+        // Handle connection updates
+        sock.ev.on(EVENTS.CONNECTION, async (update: Partial<ConnectionState>) => {
+            const { connection, lastDisconnect, qr } = update;
+            logger.info(`Connection state update: ${connection}`);
+
+            if (qr) {
+                logger.info("QR code received");
+                console.log("\n===========================================");
+                console.log("🔗 QR CODE RECEIVED - PLEASE SCAN!");
+                console.log("📱 Open WhatsApp on your phone and scan this QR code:");
+                console.log("===========================================\n");
+
+                const qrUrl = `https://quickchart.io/qr?text=${encodeURIComponent(qr)}&size=300`;
+                try {
+                    await open(qrUrl);
+                    console.log("✅ QR code opened in your browser!");
+                } catch (error) {
+                    logger.error("Failed to open QR code in browser:", error);
+                    console.log("❌ Could not open browser automatically");
+                    console.log("📱 Please scan this QR code:");
+                    console.log(qr);
+                }
+            }
+
+            if (connection === "open") {
+                clearTimeout(connectionTimeout);
+                logger.info("WhatsApp connection established successfully");
+                console.log("✅ Connected to WhatsApp!");
+
+                if (sock.user) {
+                    const userInfo = `${sock.user.name || sock.user.id}`;
+                    logger.info(`Logged in as: ${userInfo}`);
+                    console.log(`📱 Logged in as: ${userInfo}`);
+                }
+
+                resolve(sock);
+            }
+
+            if (connection === "close") {
+                const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
+                const errorMessage = (lastDisconnect?.error as Error)?.message || "Unknown error";
+                logger.warn(`Connection closed with status ${statusCode}: ${errorMessage}`);
+
+                if (statusCode === DisconnectReason.loggedOut) {
+                    logger.error("Device logged out, clearing auth data");
+                    console.log("❌ Device logged out. Please scan QR code again.");
+                    await cleanAuth(logger);
+                    reject(new Error("Logged out"));
+                } else if (statusCode === DisconnectReason.connectionClosed) {
+                    console.log("🔄 Connection closed, attempting to reconnect...");
+                    cleanupConnection();
+                    handleConnection(logger, version, auth).then(resolve).catch(reject);
+                } else if (statusCode === DisconnectReason.connectionLost) {
+                    console.log("🔄 Connection lost, attempting to reconnect...");
+                    cleanupConnection();
+                    handleConnection(logger, version, auth).then(resolve).catch(reject);
+                } else if (statusCode === DisconnectReason.connectionReplaced) {
+                    reconnectCount++;
+                    if (reconnectCount > MAX_RECONNECTS) {
+                        console.log("❌ Maximum reconnection attempts reached. Please restart the server.");
+                        cleanupConnection();
+                        reject(new Error("Max reconnection attempts reached"));
+                        return;
+                    }
+
+                    console.log(`🔄 Connection replaced (attempt ${reconnectCount}/${MAX_RECONNECTS}), cleaning up...`);
+                    cleanupConnection();
+                    console.log("⏳ Waiting for 10 seconds before reconnecting...");
+
+                    // Wait longer between reconnect attempts
+                    setTimeout(() => {
+                        reject(new Error("Connection replaced"));
+                    }, 10000);
+                } else if (statusCode === DisconnectReason.restartRequired) {
+                    console.log("🔄 Restart required, attempting to reconnect...");
+                    cleanupConnection();
+                    handleConnection(logger, version, auth).then(resolve).catch(reject);
+                } else {
+                    console.log("🔄 Unknown disconnect reason, attempting to reconnect...");
+                    cleanupConnection();
+                    handleConnection(logger, version, auth).then(resolve).catch(reject);
+                }
+            }
+        });
+
+        // Handle credential updates
+        sock.ev.on(EVENTS.CREDS, auth.saveCreds);
+
+        // Handle messages
+        sock.ev.on(EVENTS.MESSAGES, async ({ messages, type }: { messages: WAMessage[], type: string }) => {
+            if (type === "notify" || type === "append") {
+                for (const msg of messages) {
+                    const parsed = parseMessageForDb(msg);
+                    if (parsed) {
+                        try {
+                            await storeMessage(parsed);
+                            logger.info(`Stored message from ${parsed.sender || "me"}: ${parsed.content.substring(0, 50)}...`);
+                        } catch (error) {
+                            logger.error("Failed to store message:", error);
+                        }
+                    }
+                }
+            }
+        });
+    });
+}
+
+let globalSocket: WASocket | null = null;
+let reconnectCount = 0;
+const MAX_RECONNECTS = 3;
+
+export async function startWhatsAppConnection(logger: Logger): Promise<WASocket> {
+    // Reset reconnect count on fresh start
+    reconnectCount = 0;
+
+    try {
+        // Clean up any existing connection
+        if (globalSocket) {
+            try {
+                // Clean up all event listeners
+                Object.values(EVENTS).forEach(event => {
+                    globalSocket?.ev.removeAllListeners(event as keyof BaileysEventMap);
+                });
+                globalSocket.ws?.close();
+                globalSocket = null;
+            } catch (err) {
+                logger.warn("Error cleaning up existing connection:", err);
+            }
+        }
+
+        // Clear auth state on fresh start
+        await cleanAuth(logger);
+
+        const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+        const { version } = await fetchLatestBaileysVersion();
+
+        const socket = await handleConnection(logger, version, { state, saveCreds });
+        globalSocket = socket;
+        return socket;
+    } catch (error: any) {
+        logger.error("Failed to establish WhatsApp connection:", error);
+        throw error;
+    }
+}

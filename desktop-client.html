@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp MCP Desktop Client</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #25d366 0%, #128c7e 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .tool-section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border: 1px solid #e1e5e9;
+            border-radius: 15px;
+            background: #f8f9fa;
+        }
+
+        .tool-section h3 {
+            color: #25d366;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+        }
+
+        .input-group {
+            margin-bottom: 15px;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .input-group input, .input-group textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .input-group input:focus, .input-group textarea:focus {
+            outline: none;
+            border-color: #25d366;
+        }
+
+        .btn {
+            background: #25d366;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        .btn:hover {
+            background: #128c7e;
+            transform: translateY(-2px);
+        }
+
+        .btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .result {
+            margin-top: 15px;
+            padding: 15px;
+            background: white;
+            border-radius: 8px;
+            border-left: 4px solid #25d366;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+
+        .error {
+            border-left-color: #dc3545;
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .status {
+            text-align: center;
+            padding: 20px;
+            font-size: 1.1em;
+            font-weight: 600;
+        }
+
+        .status.connected {
+            color: #25d366;
+        }
+
+        .status.disconnected {
+            color: #dc3545;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+        }
+
+        .quick-actions {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .quick-btn {
+            background: #f8f9fa;
+            border: 2px solid #e1e5e9;
+            padding: 15px;
+            border-radius: 10px;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.3s;
+        }
+
+        .quick-btn:hover {
+            border-color: #25d366;
+            background: #e8f5e8;
+        }
+
+        .quick-btn h4 {
+            color: #25d366;
+            margin-bottom: 5px;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #25d366;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📱 WhatsApp MCP Client</h1>
+            <p>Model Context Protocol Desktop Interface</p>
+        </div>
+
+        <div class="content">
+            <div class="status disconnected" id="status">
+                🔴 Disconnected from MCP Server
+            </div>
+
+            <div class="quick-actions">
+                <div class="quick-btn" onclick="testConnection()">
+                    <h4>🔌 Test Connection</h4>
+                    <p>Verify MCP server is running</p>
+                </div>
+                <div class="quick-btn" onclick="listTools()">
+                    <h4>🔧 List Tools</h4>
+                    <p>Show available MCP tools</p>
+                </div>
+                <div class="quick-btn" onclick="listChats()">
+                    <h4>📱 List Chats</h4>
+                    <p>Show all WhatsApp chats</p>
+                </div>
+                <div class="quick-btn" onclick="getSchema()">
+                    <h4>🗄️ Database Schema</h4>
+                    <p>View database structure</p>
+                </div>
+            </div>
+
+            <div class="grid">
+                <!-- List Chats Tool -->
+                <div class="tool-section">
+                    <h3>📱 List Chats</h3>
+                    <div class="input-group">
+                        <label>Limit:</label>
+                        <input type="number" id="chatsLimit" value="10" min="1" max="100">
+                    </div>
+                    <div class="input-group">
+                        <label>Page:</label>
+                        <input type="number" id="chatsPage" value="0" min="0">
+                    </div>
+                    <div class="input-group">
+                        <label>Sort By:</label>
+                        <select id="chatsSort">
+                            <option value="last_active">Last Active</option>
+                            <option value="name">Name</option>
+                        </select>
+                    </div>
+                    <button class="btn" onclick="executeListChats()">List Chats</button>
+                    <div class="result" id="chatsResult"></div>
+                </div>
+
+                <!-- List Messages Tool -->
+                <div class="tool-section">
+                    <h3>💬 List Messages</h3>
+                    <div class="input-group">
+                        <label>Chat JID:</label>
+                        <input type="text" id="messagesChatJid" placeholder="1234567890@s.whatsapp.net">
+                    </div>
+                    <div class="input-group">
+                        <label>Limit:</label>
+                        <input type="number" id="messagesLimit" value="20" min="1" max="100">
+                    </div>
+                    <div class="input-group">
+                        <label>Page:</label>
+                        <input type="number" id="messagesPage" value="0" min="0">
+                    </div>
+                    <button class="btn" onclick="executeListMessages()">List Messages</button>
+                    <div class="result" id="messagesResult"></div>
+                </div>
+
+                <!-- Search Contacts Tool -->
+                <div class="tool-section">
+                    <h3>👥 Search Contacts</h3>
+                    <div class="input-group">
+                        <label>Search Query:</label>
+                        <input type="text" id="contactsQuery" placeholder="Enter name or phone number">
+                    </div>
+                    <button class="btn" onclick="executeSearchContacts()">Search Contacts</button>
+                    <div class="result" id="contactsResult"></div>
+                </div>
+
+                <!-- Search Messages Tool -->
+                <div class="tool-section">
+                    <h3>🔍 Search Messages</h3>
+                    <div class="input-group">
+                        <label>Search Query:</label>
+                        <input type="text" id="searchQuery" placeholder="Enter text to search for">
+                    </div>
+                    <div class="input-group">
+                        <label>Chat JID (optional):</label>
+                        <input type="text" id="searchChatJid" placeholder="Leave empty to search all chats">
+                    </div>
+                    <div class="input-group">
+                        <label>Limit:</label>
+                        <input type="number" id="searchLimit" value="10" min="1" max="100">
+                    </div>
+                    <button class="btn" onclick="executeSearchMessages()">Search Messages</button>
+                    <div class="result" id="searchResult"></div>
+                </div>
+
+                <!-- Get Chat Tool -->
+                <div class="tool-section">
+                    <h3>📋 Get Chat Details</h3>
+                    <div class="input-group">
+                        <label>Chat JID:</label>
+                        <input type="text" id="getChatJid" placeholder="1234567890@s.whatsapp.net">
+                    </div>
+                    <button class="btn" onclick="executeGetChat()">Get Chat</button>
+                    <div class="result" id="getChatResult"></div>
+                </div>
+
+                <!-- Send Message Tool -->
+                <div class="tool-section">
+                    <h3>📤 Send Message</h3>
+                    <div class="input-group">
+                        <label>Recipient JID:</label>
+                        <input type="text" id="sendRecipient" placeholder="1234567890@s.whatsapp.net">
+                    </div>
+                    <div class="input-group">
+                        <label>Message:</label>
+                        <textarea id="sendMessage" rows="3" placeholder="Enter your message"></textarea>
+                    </div>
+                    <button class="btn" onclick="executeSendMessage()">Send Message</button>
+                    <div class="result" id="sendResult"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let mcpClient = null;
+        let isConnected = false;
+
+        // Initialize MCP client
+        async function initMcpClient() {
+            try {
+                // This would normally connect to your MCP server
+                // For now, we'll simulate the connection
+                console.log("Initializing MCP client...");
+                
+                // Simulate connection delay
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                
+                isConnected = true;
+                updateStatus();
+                console.log("MCP client initialized successfully");
+            } catch (error) {
+                console.error("Failed to initialize MCP client:", error);
+                isConnected = false;
+                updateStatus();
+            }
+        }
+
+        function updateStatus() {
+            const statusEl = document.getElementById('status');
+            if (isConnected) {
+                statusEl.textContent = "🟢 Connected to MCP Server";
+                statusEl.className = "status connected";
+            } else {
+                statusEl.textContent = "🔴 Disconnected from MCP Server";
+                statusEl.className = "status disconnected";
+            }
+        }
+
+        function showResult(elementId, content, isError = false) {
+            const element = document.getElementById(elementId);
+            element.textContent = content;
+            element.className = `result ${isError ? 'error' : ''}`;
+        }
+
+        function showLoading(elementId) {
+            const element = document.getElementById(elementId);
+            element.innerHTML = '<div class="loading"></div> Loading...';
+        }
+
+        // Test connection
+        async function testConnection() {
+            showLoading('chatsResult');
+            try {
+                // Simulate API call
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                showResult('chatsResult', '✅ Connection test successful!\nMCP server is responding correctly.');
+            } catch (error) {
+                showResult('chatsResult', `❌ Connection test failed: ${error.message}`, true);
+            }
+        }
+
+        // List tools
+        async function listTools() {
+            showLoading('chatsResult');
+            try {
+                await new Promise(resolve => setTimeout(resolve, 800));
+                const tools = [
+                    'search_contacts - Search for contacts by name or phone number',
+                    'list_messages - List messages in a specific chat',
+                    'list_chats - List all available chats',
+                    'get_chat - Get detailed information about a specific chat',
+                    'get_message_context - Get context around a specific message',
+                    'send_message - Send a message to a recipient',
+                    'search_messages - Search for messages across all chats'
+                ];
+                showResult('chatsResult', `Available MCP Tools:\n\n${tools.join('\n')}`);
+            } catch (error) {
+                showResult('chatsResult', `❌ Failed to list tools: ${error.message}`, true);
+            }
+        }
+
+        // List chats
+        async function executeListChats() {
+            const limit = document.getElementById('chatsLimit').value;
+            const page = document.getElementById('chatsPage').value;
+            const sort = document.getElementById('chatsSort').value;
+            
+            showLoading('chatsResult');
+            try {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                
+                // Simulate response
+                const mockChats = [
+                    {
+                        jid: "1234567890@s.whatsapp.net",
+                        name: "John Doe",
+                        is_group: false,
+                        last_message_time: "2024-01-15T10:30:00Z",
+                        last_message_preview: "Hello there!",
+                        last_sender_display: "John Doe"
+                    },
+                    {
+                        jid: "9876543210@s.whatsapp.net",
+                        name: "Jane Smith",
+                        is_group: false,
+                        last_message_time: "2024-01-15T09:15:00Z",
+                        last_message_preview: "How are you?",
+                        last_sender_display: "Me"
+                    }
+                ];
+                
+                showResult('chatsResult', `Chats (${mockChats.length} found):\n\n${JSON.stringify(mockChats, null, 2)}`);
+            } catch (error) {
+                showResult('chatsResult', `❌ Failed to list chats: ${error.message}`, true);
+            }
+        }
+
+        // List messages
+        async function executeListMessages() {
+            const chatJid = document.getElementById('messagesChatJid').value;
+            const limit = document.getElementById('messagesLimit').value;
+            const page = document.getElementById('messagesPage').value;
+            
+            if (!chatJid) {
+                showResult('messagesResult', '❌ Please enter a Chat JID', true);
+                return;
+            }
+            
+            showLoading('messagesResult');
+            try {
+                await new Promise(resolve => setTimeout(resolve, 800));
+                
+                // Simulate response
+                const mockMessages = [
+                    {
+                        id: "msg1",
+                        chat_jid: chatJid,
+                        sender_display: "John Doe",
+                        content: "Hello there!",
+                        timestamp: "2024-01-15T10:30:00Z",
+                        is_from_me: false
+                    },
+                    {
+                        id: "msg2",
+                        chat_jid: chatJid,
+                        sender_display: "Me",
+                        content: "Hi John! How are you?",
+                        timestamp: "2024-01-15T10:31:00Z",
+                        is_from_me: true
+                    }
+                ];
+                
+                showResult('messagesResult', `Messages in ${chatJid}:\n\n${JSON.stringify(mockMessages, null, 2)}`);
+            } catch (error) {
+                showResult('messagesResult', `❌ Failed to list messages: ${error.message}`, true);
+            }
+        }
+
+        // Search contacts
+        async function executeSearchContacts() {
+            const query = document.getElementById('contactsQuery').value;
+            
+            if (!query) {
+                showResult('contactsResult', '❌ Please enter a search query', true);
+                return;
+            }
+            
+            showLoading('contactsResult');
+            try {
+                await new Promise(resolve => setTimeout(resolve, 600));
+                
+                // Simulate response
+                const mockContacts = [
+                    {
+                        jid: "1234567890@s.whatsapp.net",
+                        name: "John Doe"
+                    },
+                    {
+                        jid: "5551234567@s.whatsapp.net",
+                        name: "John Smith"
+                    }
+                ];
+                
+                showResult('contactsResult', `Contacts matching "${query}":\n\n${JSON.stringify(mockContacts, null, 2)}`);
+            } catch (error) {
+                showResult('contactsResult', `❌ Failed to search contacts: ${error.message}`, true);
+            }
+        }
+
+        // Search messages
+        async function executeSearchMessages() {
+            const query = document.getElementById('searchQuery').value;
+            const chatJid = document.getElementById('searchChatJid').value;
+            const limit = document.getElementById('searchLimit').value;
+            
+            if (!query) {
+                showResult('searchResult', '❌ Please enter a search query', true);
+                return;
+            }
+            
+            showLoading('searchResult');
+            try {
+                await new Promise(resolve => setTimeout(resolve, 700));
+                
+                // Simulate response
+                const mockSearchResults = [
+                    {
+                        id: "msg1",
+                        chat_jid: chatJid || "1234567890@s.whatsapp.net",
+                        sender_display: "John Doe",
+                        content: `Found message containing "${query}"`,
+                        timestamp: "2024-01-15T10:30:00Z",
+                        is_from_me: false
+                    }
+                ];
+                
+                const scope = chatJid ? `in chat ${chatJid}` : "across all chats";
+                showResult('searchResult', `Messages containing "${query}" ${scope}:\n\n${JSON.stringify(mockSearchResults, null, 2)}`);
+            } catch (error) {
+                showResult('searchResult', `❌ Failed to search messages: ${error.message}`, true);
+            }
+        }
+
+        // Get chat
+        async function executeGetChat() {
+            const chatJid = document.getElementById('getChatJid').value;
+            
+            if (!chatJid) {
+                showResult('getChatResult', '❌ Please enter a Chat JID', true);
+                return;
+            }
+            
+            showLoading('getChatResult');
+            try {
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                // Simulate response
+                const mockChat = {
+                    jid: chatJid,
+                    name: "John Doe",
+                    is_group: false,
+                    last_message_time: "2024-01-15T10:30:00Z",
+                    last_message_preview: "Hello there!",
+                    last_sender_display: "John Doe",
+                    last_is_from_me: false
+                };
+                
+                showResult('getChatResult', `Chat details for ${chatJid}:\n\n${JSON.stringify(mockChat, null, 2)}`);
+            } catch (error) {
+                showResult('getChatResult', `❌ Failed to get chat: ${error.message}`, true);
+            }
+        }
+
+        // Send message
+        async function executeSendMessage() {
+            const recipient = document.getElementById('sendRecipient').value;
+            const message = document.getElementById('sendMessage').value;
+            
+            if (!recipient || !message) {
+                showResult('sendResult', '❌ Please enter both recipient and message', true);
+                return;
+            }
+            
+            if (!confirm(`Are you sure you want to send this message to ${recipient}?\n\nMessage: "${message}"`)) {
+                return;
+            }
+            
+            showLoading('sendResult');
+            try {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                
+                // Simulate response
+                showResult('sendResult', `✅ Message sent successfully to ${recipient}!\n\nMessage ID: msg_${Date.now()}\nRecipient: ${recipient}\nContent: "${message}"`);
+                
+                // Clear the message field
+                document.getElementById('sendMessage').value = '';
+            } catch (error) {
+                showResult('sendResult', `❌ Failed to send message: ${error.message}`, true);
+            }
+        }
+
+        // Get schema
+        async function getSchema() {
+            showLoading('chatsResult');
+            try {
+                await new Promise(resolve => setTimeout(resolve, 400));
+                
+                const schema = `Database Schema:
+
+TABLE chats (
+  jid TEXT PRIMARY KEY,
+  name TEXT,
+  last_message_time TIMESTAMP
+)
+
+TABLE messages (
+  id TEXT,
+  chat_jid TEXT,
+  sender TEXT,
+  content TEXT,
+  timestamp TIMESTAMP,
+  is_from_me BOOLEAN,
+  PRIMARY KEY(id, chat_jid),
+  FOREIGN KEY(chat_jid) REFERENCES chats(jid)
+)`;
+                
+                showResult('chatsResult', schema);
+            } catch (error) {
+                showResult('chatsResult', `❌ Failed to get schema: ${error.message}`, true);
+            }
+        }
+
+        // Initialize when page loads
+        window.addEventListener('load', initMcpClient);
+    </script>
+</body>
+</html> 

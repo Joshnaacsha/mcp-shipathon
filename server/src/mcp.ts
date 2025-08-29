@@ -56,7 +56,26 @@ export async function startMcpServer(
   mcpLogger: P.Logger,
   waLogger: P.Logger,
 ): Promise<void> {
+  console.log("🔧 Initializing MCP server...");
   mcpLogger.info("Initializing MCP server...");
+
+  // Validate WhatsApp connection
+  const validateConnection = () => {
+    if (!sock) {
+      mcpLogger.warn("WhatsApp connection not initialized");
+      return false;
+    }
+    try {
+      if (!sock.ws) {
+        mcpLogger.warn("WhatsApp WebSocket not available");
+        return false;
+      }
+      return true;
+    } catch (error) {
+      mcpLogger.warn("Error checking WhatsApp connection:", error);
+      return false;
+    }
+  };
 
   const server = new McpServer({
     name: "whatsapp-baileys-ts",
@@ -66,6 +85,111 @@ export async function startMcpServer(
       resources: {},
     },
   });
+
+  console.log("📋 Registering MCP tools...");
+
+  // Register tools directly to avoid async issues
+  registerAllTools(server, sock, mcpLogger, waLogger);
+
+  console.log("✅ All tools and resources registered");
+
+  // Start the transport connection
+  console.log("🔌 Creating stdio transport...");
+  const transport = new StdioServerTransport();
+  mcpLogger.info("MCP server configured. Connecting stdio transport...");
+
+  try {
+    console.log("🔗 Connecting MCP server to transport...");
+    await server.connect(transport);
+    console.log("✅ MCP transport connected successfully!");
+    mcpLogger.info("MCP transport connected. Server is ready and listening via stdio.");
+    console.log("✅ MCP Server started and listening for requests!");
+  } catch (error: any) {
+    console.log("❌ Failed to connect MCP transport:", error.message);
+    mcpLogger.error(`[FATAL] Failed to connect MCP transport: ${error.message}`, error);
+    process.exit(1);
+  }
+
+  mcpLogger.info("MCP Server setup complete. Waiting for requests from client...");
+  console.log("🎯 MCP Server ready - client can now connect and use tools!");
+
+  // Keep the process alive
+  process.stdin.resume();
+}
+
+function registerAllTools(
+  server: McpServer,
+  sock: WhatsAppSocket | null,
+  mcpLogger: P.Logger,
+  waLogger: P.Logger,
+) {
+
+  // Add a status tool to check server readiness
+  server.tool(
+    "get_status",
+    {},
+    async () => {
+      mcpLogger.info("[MCP Tool] Executing get_status");
+      try {
+        // Add timeout for status check
+        const statusCheck = new Promise((resolve) => {
+          if (!sock) {
+            resolve({
+              whatsapp_connected: false,
+              user_name: "Not connected",
+              timestamp: new Date().toISOString(),
+              server_ready: true,
+              state: "disconnected"
+            });
+            return;
+          }
+
+          // Check if socket is really connected
+          const timeoutId = setTimeout(() => {
+            resolve({
+              whatsapp_connected: false,
+              user_name: "Connection timeout",
+              timestamp: new Date().toISOString(),
+              server_ready: true,
+              state: "timeout"
+            });
+          }, 5000);
+
+          // Try to get actual status
+          Promise.resolve().then(() => {
+            clearTimeout(timeoutId);
+            resolve({
+              whatsapp_connected: sock?.user ? true : false,
+              user_name: sock?.user?.name || "Unknown",
+              timestamp: new Date().toISOString(),
+              server_ready: true,
+              state: "connected"
+            });
+          });
+        });
+
+        const status = await statusCheck;
+        mcpLogger.info(`Status check result: ${JSON.stringify(status)}`);
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(status, null, 2),
+            },
+          ],
+        };
+      } catch (error: any) {
+        mcpLogger.error(`[MCP Tool Error] get_status failed: ${error.message}`);
+        return {
+          isError: true,
+          content: [
+            { type: "text", text: `Error getting status: ${error.message}` },
+          ],
+        };
+      }
+    },
+  );
 
   server.tool(
     "search_contacts",
@@ -138,7 +262,16 @@ export async function startMcpServer(
         `[MCP Tool] Executing list_messages for chat ${chat_jid}, limit=${limit}, page=${page}`,
       );
       try {
-        const messages = getMessages(chat_jid, limit, page);
+        // Add timeout for database operations
+        const dbOperation = Promise.race([
+          Promise.resolve().then(() => getMessages(chat_jid, limit, page)),
+          new Promise<DbMessage[]>((_, reject) =>
+            setTimeout(() => reject(new Error("Database operation timed out")), 5000)
+          )
+        ]);
+
+        const messages = await dbOperation as DbMessage[];
+
         if (!messages.length && page === 0) {
           return {
             content: [
@@ -218,6 +351,19 @@ export async function startMcpServer(
         `[MCP Tool] Executing list_chats: limit=${limit}, page=${page}, sort=${sort_by}, query=${query}, lastMsg=${include_last_message}`,
       );
       try {
+        // Check if WhatsApp is connected before proceeding
+        if (!sock || !sock.user) {
+          return {
+            isError: true,
+            content: [
+              {
+                type: "text",
+                text: "WhatsApp is not connected yet. Please wait for the connection to stabilize."
+              },
+            ],
+          };
+        }
+
         const chats = getChats(
           limit,
           page,
@@ -225,6 +371,7 @@ export async function startMcpServer(
           query ?? null,
           include_last_message,
         );
+
         if (!chats.length && page === 0) {
           return {
             content: [
@@ -239,13 +386,13 @@ export async function startMcpServer(
             content: [
               {
                 type: "text",
-                text: `No more chats found on page ${page}${
-                  query ? ` matching "${query}"` : ""
-                }.`,
+                text: `No more chats found on page ${page}${query ? ` matching "${query}"` : ""
+                  }.`,
               },
             ],
           };
         }
+
         const formattedChats = chats.map(formatDbChatForJson);
         return {
           content: [
@@ -260,7 +407,10 @@ export async function startMcpServer(
         return {
           isError: true,
           content: [
-            { type: "text", text: `Error listing chats: ${error.message}` },
+            {
+              type: "text",
+              text: `Error listing chats: ${error.message}. Please try again in a few seconds.`
+            },
           ],
         };
       }
@@ -438,26 +588,14 @@ export async function startMcpServer(
           message,
         );
 
-        if (result && result.key && result.key.id) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Message sent successfully to ${normalizedRecipient} (ID: ${result.key.id}).`,
-              },
-            ],
-          };
-        } else {
-          return {
-            isError: true,
-            content: [
-              {
-                type: "text",
-                text: `Failed to send message to ${normalizedRecipient}. See server logs for details.`,
-              },
-            ],
-          };
-        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Message sent successfully to ${normalizedRecipient} (ID: ${result.key.id}).`,
+            },
+          ],
+        };
       } catch (error: any) {
         mcpLogger.error(
           `[MCP Tool Error] send_message failed for ${recipient}: ${error.message}`,
@@ -569,24 +707,4 @@ TABLE messages (id TEXT, chat_jid TEXT, sender TEXT, content TEXT, timestamp TIM
       ],
     };
   });
-
-  const transport = new StdioServerTransport();
-  mcpLogger.info("MCP server configured. Connecting stdio transport...");
-
-  try {
-    await server.connect(transport);
-    mcpLogger.info(
-      "MCP transport connected. Server is ready and listening via stdio.",
-    );
-  } catch (error: any) {
-    mcpLogger.error(
-      `[FATAL] Failed to connect MCP transport: ${error.message}`,
-      error,
-    );
-    process.exit(1);
-  }
-
-  mcpLogger.info(
-    "MCP Server setup complete. Waiting for requests from client...",
-  );
 }
